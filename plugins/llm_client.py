@@ -1,4 +1,4 @@
-"""LLM 客户端 — Function Calling + 指数退避重试。模型固定 glm-5-turbo。"""
+"""LLM 客户端 — Function Calling + 指数退避重试 + 动态模型切换。"""
 
 import asyncio
 import json
@@ -7,16 +7,32 @@ import logging
 from openai import AsyncOpenAI
 
 from config import (
+    DEFAULT_MODEL,
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_BASE_DELAY_SEC,
     LLM_MAX_RETRIES,
-    MODEL,
 )
 
 logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+
+# ── per-user 模型设置（默认取 config.DEFAULT_MODEL） ──
+_user_models: dict[str, str] = {}
+
+
+def get_model(user_id: str) -> str:
+    return _user_models.get(user_id, DEFAULT_MODEL)
+
+
+def set_model(user_id: str, model: str):
+    _user_models[user_id] = model
+
+
+def reset_model(user_id: str):
+    _user_models.pop(user_id, None)
+
 
 # ── Function Calling Tools 定义 ──
 TOOLS = [
@@ -75,7 +91,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "fetch_url",
-            "description": "抓取指定 URL 的网页内容，自动转为可读文本。用于深入阅读搜索结果中的链接。",
+            "description": "抓取指定 URL 的网页内容，自动转为可读文本。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -88,22 +104,71 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": (
+                "创建一个新技能脚本并安装到 skills/ 目录。"
+                "用户描述需求后，生成完整可运行的代码，"
+                "首行必须包含 '# DESC: <描述>' 注释。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "技能文件名（不含扩展名）",
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "完整的技能脚本源代码",
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["python", "bash"],
+                        "description": "脚本语言",
+                    },
+                },
+                "required": ["name", "code", "language"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_skill",
+            "description": "删除 skills/ 目录中指定的技能脚本。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要删除的技能名",
+                    }
+                },
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 
 # ── 核心调用 ──
+
 async def chat(
     messages: list[dict],
+    user_id: str = "",
     use_tools: bool = True,
 ) -> dict:
-    """
-    调用 LLM，返回结构化结果。
+    """调用 LLM，返回结构化结果。
 
-    返回格式:
-    - 纯文本回复: {"type": "text", "content": "..."}
-    - Tool 调用:   {"type": "tool_call", "name": "run_command", "arguments": {...}}
+    返回:
+    - 纯文本: {"type": "text", "content": "..."}
+    - Tool:   {"type": "tool_call", "name": "...", "arguments": {...}}
     """
-    kwargs = {"model": MODEL, "messages": messages}
+    model = get_model(user_id)
+    kwargs = {"model": model, "messages": messages}
     if use_tools:
         kwargs["tools"] = TOOLS
         kwargs["tool_choice"] = "auto"
@@ -126,9 +191,10 @@ async def chat(
     return {"type": "text", "content": msg.content or ""}
 
 
-async def simple_chat(messages: list[dict]) -> str:
+async def simple_chat(messages: list[dict], user_id: str = "") -> str:
     """不使用 tools 的简单聊天，返回纯文本。"""
-    response = await _call_with_retry(model=MODEL, messages=messages)
+    model = get_model(user_id)
+    response = await _call_with_retry(model=model, messages=messages)
     return response.choices[0].message.content or ""
 
 
