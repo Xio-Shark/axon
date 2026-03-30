@@ -14,6 +14,7 @@ from config import (
     SCHEDULED_TASKS_FILE,
 )
 from plugins import llm_client
+from plugins import security
 from plugins.command_executor import truncate
 
 require("nonebot_plugin_apscheduler")
@@ -65,9 +66,7 @@ async def _run_dynamic_task(task_desc: str, owner_id: str):
     try:
         code = await llm_client.simple_chat(messages)
 
-        # 安全检查：扫描生成代码中的危险关键词
-        from plugins.security import is_dangerous
-        if is_dangerous(code):
+        if security.is_dangerous(code):
             result = "⛔ 安全拦截：LLM 生成的定时任务代码包含危险操作，已跳过执行。"
             logger.warning("定时任务安全拦截: %s", task_desc)
         else:
@@ -111,26 +110,10 @@ def register_task(
     返回任务条目。
     """
     tasks = _load_tasks()
-    parts = cron_expr.strip().split()
-    if len(parts) != 5:
-        raise ValueError("cron 表达式需要 5 段: 分 时 日 月 周")
-
     task_id = _next_task_id(tasks)
     job_id = f"dynamic_task_{task_id}"
 
-    minute, hour, day, month, day_of_week = parts
-    scheduler.add_job(
-        _run_dynamic_task,
-        "cron",
-        minute=minute,
-        hour=hour,
-        day=day,
-        month=month,
-        day_of_week=day_of_week,
-        id=job_id,
-        args=[description, owner_id],
-        replace_existing=True,
-    )
+    _add_cron_job(cron_expr, job_id, description, owner_id)
 
     entry = {
         "id": task_id,
@@ -160,30 +143,40 @@ def cancel_task(task_id: int) -> bool:
 
 
 def list_tasks() -> list[dict]:
-    """返回所有注册的动态任务。"""
     return _load_tasks()
+
+
+def _add_cron_job(cron_expr: str, job_id: str, desc: str, owner_id: str):
+    """注册一个 cron job 到调度器。"""
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        raise ValueError("cron 表达式需要 5 段: 分 时 日 月 周")
+    minute, hour, day, month, day_of_week = parts
+    scheduler.add_job(
+        _run_dynamic_task,
+        "cron",
+        minute=minute,
+        hour=hour,
+        day=day,
+        month=month,
+        day_of_week=day_of_week,
+        id=job_id,
+        args=[desc, owner_id],
+        replace_existing=True,
+    )
 
 
 def restore_tasks():
     """重启后恢复持久化的动态任务到调度器。"""
     tasks = _load_tasks()
     for task in tasks:
-        parts = task["cron"].strip().split()
-        if len(parts) != 5:
+        try:
+            _add_cron_job(
+                task["cron"], task["job_id"],
+                task["description"], task["owner_id"],
+            )
+        except ValueError:
             continue
-        minute, hour, day, month, day_of_week = parts
-        scheduler.add_job(
-            _run_dynamic_task,
-            "cron",
-            minute=minute,
-            hour=hour,
-            day=day,
-            month=month,
-            day_of_week=day_of_week,
-            id=task["job_id"],
-            args=[task["description"], task["owner_id"]],
-            replace_existing=True,
-        )
     logger.info("已恢复 %d 个持久化定时任务", len(tasks))
 
 
