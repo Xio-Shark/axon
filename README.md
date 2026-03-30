@@ -41,9 +41,9 @@ bash install.sh
 axon/
 ├── bot.py                  # 启动入口
 ├── config.py               # 集中配置
+├── axon-skills.py          # 技能包管理器 CLI
 ├── install.sh              # 一键安装脚本
 ├── .env                    # 凭据（安装时自动生成，不上传）
-├── qq-ai-bot.service       # systemd 守护文件（安装时生成）
 ├── plugins/
 │   ├── chat_handler.py     # 消息路由 + 多轮对话 + 斜杠命令
 │   ├── llm_client.py       # LLM + Function Calling + 指数退避重试
@@ -89,6 +89,45 @@ if __name__ == "__main__":
 ```
 
 Axon 会自动发现并告知 LLM 可用技能。
+
+## 📦 技能包管理器
+
+从 GitHub 仓库安装技能：
+
+```bash
+# 安装整个仓库的所有技能
+python axon-skills.py add https://github.com/someone/axon-skills-pack
+
+# 只安装指定技能
+python axon-skills.py add https://github.com/someone/axon-skills-pack --skill weather
+
+# 查看已安装
+python axon-skills.py list
+
+# 移除技能
+python axon-skills.py remove weather.py
+
+# 查看技能详情
+python axon-skills.py info network_check
+```
+
+### 创建自己的技能包
+
+创建一个 GitHub 仓库，放入 `.py` 或 `.sh` 脚本，首行加 `# DESC:` 注释即可：
+
+```python
+# DESC: 查询今日天气
+import urllib.request, json
+
+def main():
+    resp = urllib.request.urlopen("https://wttr.in/?format=3")
+    print(resp.read().decode())
+
+if __name__ == "__main__":
+    main()
+```
+
+别人就可以通过 `python axon-skills.py add https://github.com/you/your-skills` 安装。
 
 ## 🖥️ 部署
 
