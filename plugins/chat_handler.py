@@ -74,6 +74,8 @@ def _handle_slash_command(msg: str, user_id: str) -> str | None:
     if msg == "/help":
         return (
             "📖 Axon 命令列表：\n"
+            "/模型 <名称> — 切换 LLM 模型\n"
+            "/模型 — 查看当前模型\n"
             "/记住 <内容> — 存入长期记忆\n"
             "/记忆列表 — 查看所有记忆\n"
             "/删除记忆 <id> — 删除指定记忆\n"
@@ -84,6 +86,14 @@ def _handle_slash_command(msg: str, user_id: str) -> str | None:
             "/取消任务 <id> — 取消定时任务\n"
             "同意 — 放行被拦截的高危命令"
         )
+
+    if msg.startswith("/模型"):
+        model_name = msg[len("/模型"):].strip()
+        if not model_name:
+            current = llm_client.get_model(user_id)
+            return f"🤖 当前模型: {current}"
+        llm_client.set_model(user_id, model_name)
+        return f"✅ 模型已切换为: {model_name}"
 
     if msg.startswith("/记住"):
         content = msg[len("/记住"):].strip()
@@ -178,7 +188,7 @@ async def _handle_llm_flow(user_msg: str, user_id: str):
 
     for _ in range(_MAX_TOOL_ROUNDS):
         try:
-            result = await llm_client.chat(messages)
+            result = await llm_client.chat(messages, user_id=user_id)
         except Exception as e:
             logger.error("LLM 调用失败: %s", e)
             await god_mode.finish(f"❌ AI 服务暂时不可用: {e}")
@@ -239,6 +249,16 @@ async def _dispatch_tool(
 
     if name == "fetch_url":
         return web_search.fetch_url(args.get("url", ""))
+
+    if name == "create_skill":
+        return skill_manager.create_skill(
+            name=args.get("name", "unnamed"),
+            code=args.get("code", ""),
+            language=args.get("language", "python"),
+        )
+
+    if name == "remove_skill":
+        return skill_manager.remove_skill(args.get("name", ""))
 
     return f"❌ 未知 tool: {name}"
 

@@ -110,7 +110,7 @@ AUDIT_LOG_FILE = os.path.join(DATA_DIR, "audit.log")
 
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://your-llm-api.com/v1")
-MODEL = "glm-5-turbo"
+DEFAULT_MODEL = os.getenv("LLM_MODEL", "glm-5-turbo")
 
 OWNER_QQ_ID = os.getenv("OWNER_QQ_ID", "")
 
