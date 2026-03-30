@@ -1,11 +1,5 @@
-"""联网搜索模块 — DuckDuckGo + Jina 网页提取。
+"""联网搜索模块 — DuckDuckGo 搜索 + Jina 网页转 Markdown。"""
 
-两层能力：
-1. search(query)     — 搜索引擎获取摘要结果
-2. fetch_url(url)    — 抓取网页并转为 Markdown（通过 Jina）
-"""
-
-import json
 import logging
 import urllib.parse
 import urllib.request
@@ -19,6 +13,20 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 _TIMEOUT = 15
+_MAX_CONTENT_LEN = 4000
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _MAX_CONTENT_LEN:
+        return text
+    return text[:_MAX_CONTENT_LEN] + "\n\n[内容已截断]"
+
+
+def _http_get(url: str) -> str:
+    """通用 HTTP GET，返回文本内容。"""
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        return resp.read().decode("utf-8", errors="replace")
 
 
 def search(query: str, max_results: int = 5) -> str:
@@ -38,73 +46,29 @@ def search(query: str, max_results: int = 5) -> str:
 
 
 def fetch_url(url: str) -> str:
-    """通过 Jina 将网页转 Markdown，节省 token。"""
+    """通过 Jina 将网页转 Markdown；失败则直接抓取。"""
     clean = url.removeprefix("https://").removeprefix("http://")
-    jina_url = f"{_JINA_PREFIX}{clean}"
     try:
-        req = urllib.request.Request(
-            jina_url,
-            headers={"User-Agent": _USER_AGENT},
-        )
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            content = resp.read().decode("utf-8", errors="replace")
-        # 截断过长内容
-        if len(content) > 4000:
-            content = content[:4000] + "\n\n[内容已截断]"
-        return content
+        return _truncate(_http_get(f"{_JINA_PREFIX}{clean}"))
     except Exception as e:
-        logger.warning("Jina 抓取失败: %s，回退 curl", e)
-        return _fallback_fetch(url)
+        logger.warning("Jina 抓取失败: %s，回退直接请求", e)
 
-
-def _fallback_fetch(url: str) -> str:
-    """直接 urllib 抓取作为兜底。"""
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": _USER_AGENT},
-        )
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-        if len(raw) > 4000:
-            raw = raw[:4000] + "\n\n[内容已截断]"
-        return raw
+        return _truncate(_http_get(url))
     except Exception as e:
         return f"网页抓取失败: {e}"
 
 
+# ── DuckDuckGo HTML 解析 ──
+
 def _parse_ddg_html(html: str, max_results: int) -> str:
-    """极简 HTML 解析提取 DuckDuckGo 搜索结果。"""
     results = []
-    # DuckDuckGo HTML 结果在 class="result__body" 的 div 里
-    # 标题在 class="result__a"，摘要在 class="result__snippet"
     parts = html.split('class="result__a"')
 
     for part in parts[1:max_results + 1]:
-        title = _extract_text_between(part, ">", "</a>")
-        # 提取 href
-        href_start = part.find('href="')
-        href = ""
-        if href_start != -1:
-            href_end = part.find('"', href_start + 6)
-            href = part[href_start + 6:href_end]
-            # DuckDuckGo 的链接是跳转链接，提取真实 URL
-            if "uddg=" in href:
-                real = urllib.parse.unquote(
-                    href.split("uddg=")[-1].split("&")[0]
-                )
-                href = real
-
-        snippet = ""
-        snip_marker = 'class="result__snippet"'
-        snip_pos = part.find(snip_marker)
-        if snip_pos != -1:
-            snippet = _extract_text_between(
-                part[snip_pos:], ">", "</a>"
-            )
-            if not snippet:
-                snippet = _extract_text_between(
-                    part[snip_pos:], ">", "</td>"
-                )
+        title = _extract_text(part, ">", "</a>")
+        href = _extract_href(part)
+        snippet = _extract_snippet(part)
 
         if title:
             entry = f"**{title.strip()}**"
@@ -114,13 +78,30 @@ def _parse_ddg_html(html: str, max_results: int) -> str:
                 entry += f"\n  {snippet.strip()}"
             results.append(entry)
 
-    if not results:
-        return "未找到相关搜索结果。"
-
-    return "\n\n".join(results)
+    return "\n\n".join(results) if results else "未找到相关搜索结果。"
 
 
-def _extract_text_between(text: str, start: str, end: str) -> str:
+def _extract_href(part: str) -> str:
+    start = part.find('href="')
+    if start == -1:
+        return ""
+    end = part.find('"', start + 6)
+    href = part[start + 6:end]
+    if "uddg=" in href:
+        href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+    return href
+
+
+def _extract_snippet(part: str) -> str:
+    marker = 'class="result__snippet"'
+    pos = part.find(marker)
+    if pos == -1:
+        return ""
+    sub = part[pos:]
+    return _extract_text(sub, ">", "</a>") or _extract_text(sub, ">", "</td>")
+
+
+def _extract_text(text: str, start: str, end: str) -> str:
     """提取两个标记之间的文本，去除 HTML 标签。"""
     s = text.find(start)
     if s == -1:
@@ -130,8 +111,7 @@ def _extract_text_between(text: str, start: str, end: str) -> str:
     if e == -1:
         return ""
     raw = text[s:e]
-    # 简单去除 HTML 标签
-    clean = ""
+    result = []
     in_tag = False
     for ch in raw:
         if ch == "<":
@@ -139,5 +119,5 @@ def _extract_text_between(text: str, start: str, end: str) -> str:
         elif ch == ">":
             in_tag = False
         elif not in_tag:
-            clean += ch
-    return clean.strip()
+            result.append(ch)
+    return "".join(result).strip()

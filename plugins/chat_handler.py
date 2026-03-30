@@ -60,17 +60,17 @@ async def handle_message(bot: Bot, event: MessageEvent):
         await god_mode.finish(f"✅ 放行操作执行完毕：\n{result}")
 
     # 斜杠命令
-    reply = await _handle_slash_command(user_msg, user_id)
+    reply = _handle_slash_command(user_msg, user_id)
     if reply is not None:
         await god_mode.finish(reply)
 
     # LLM 主流程
-    await _handle_llm_flow(bot, event, user_msg, user_id)
+    await _handle_llm_flow(user_msg, user_id)
 
 
 # ── 斜杠命令 ──
 
-async def _handle_slash_command(msg: str, user_id: str) -> str | None:
+def _handle_slash_command(msg: str, user_id: str) -> str | None:
     if msg == "/help":
         return (
             "📖 Axon 命令列表：\n"
@@ -150,12 +150,7 @@ def _handle_schedule_command(msg: str, user_id: str) -> str:
 
 # ── LLM 主流程（tool-call 循环） ──
 
-async def _handle_llm_flow(
-    bot: Bot,
-    event: MessageEvent,
-    user_msg: str,
-    user_id: str,
-):
+async def _handle_llm_flow(user_msg: str, user_id: str):
     """多轮对话 + Function Calling 循环。
 
     LLM 调用 tool → 执行 → 结果回填 → LLM 再决策，
