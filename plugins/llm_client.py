@@ -58,7 +58,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "使用搜索引擎检索互联网信息。",
+            "description": "用搜索引擎搜索互联网信息，返回多条摘要结果。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -68,6 +68,23 @@ TOOLS = [
                     }
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "抓取指定 URL 的网页内容，自动转为可读文本。用于深入阅读搜索结果中的链接。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "要抓取的完整 URL",
+                    }
+                },
+                "required": ["url"],
             },
         },
     },

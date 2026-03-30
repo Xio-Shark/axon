@@ -54,8 +54,9 @@ async def _run_dynamic_task(task_desc: str, owner_id: str):
             "role": "system",
             "content": (
                 "你是私人助理，执行定时任务。"
-                "请根据任务描述，返回可直接在终端执行的纯 Bash 命令或 Python 代码。"
+                "请根据任务描述，返回可直接在终端执行的纯 Python 代码。"
                 "仅限安全的网络请求和数据展现，禁止修改系统配置。"
+                "禁止使用 rm、sudo、chmod、dd 等危险命令。"
                 "直接返回纯代码，不加 Markdown 包裹。"
             ),
         },
@@ -63,19 +64,25 @@ async def _run_dynamic_task(task_desc: str, owner_id: str):
     ]
     try:
         code = await llm_client.simple_chat(messages)
-        # 写入临时文件执行
-        tmp_file = f"/tmp/scheduled_{hash(task_desc) & 0xFFFFFF:06x}.py"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            f.write(code)
-        proc = subprocess.run(
-            f"python3 {tmp_file}",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT_SEC * 2,
-        )
-        result = (proc.stdout or "") + (proc.stderr or "")
-        result = result.strip() or "执行完成，无输出。"
+
+        # 安全检查：扫描生成代码中的危险关键词
+        from plugins.security import is_dangerous
+        if is_dangerous(code):
+            result = "⛔ 安全拦截：LLM 生成的定时任务代码包含危险操作，已跳过执行。"
+            logger.warning("定时任务安全拦截: %s", task_desc)
+        else:
+            tmp_file = f"/tmp/scheduled_{hash(task_desc) & 0xFFFFFF:06x}.py"
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                f.write(code)
+            proc = subprocess.run(
+                f"python3 {tmp_file}",
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT_SEC * 2,
+            )
+            result = (proc.stdout or "") + (proc.stderr or "")
+            result = result.strip() or "执行完成，无输出。"
     except Exception as e:
         result = f"定时任务执行失败: {e}"
 
