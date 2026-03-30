@@ -1,4 +1,4 @@
-"""消息路由 — 命令分发 + 多轮对话 + Function Calling 执行。"""
+"""消息路由 — 命令分发 + 多轮对话 + Function Calling 循环执行。"""
 
 import os
 import logging
@@ -14,12 +14,16 @@ from plugins import (
     scheduler_tasks,
     security,
     skill_manager,
+    web_search,
 )
 
 logger = logging.getLogger(__name__)
 
 # ── per-user 对话历史（滑动窗口） ──
 _conversations: dict[str, list[dict]] = {}
+
+# tool-call 循环最大轮次
+_MAX_TOOL_ROUNDS = 5
 
 
 def _get_history(user_id: str) -> list[dict]:
@@ -29,7 +33,6 @@ def _get_history(user_id: str) -> list[dict]:
 def _append_history(user_id: str, role: str, content: str):
     history = _get_history(user_id)
     history.append({"role": role, "content": content})
-    # 滑动窗口：保留最近 N 条
     if len(history) > CONVERSATION_WINDOW_SIZE:
         _conversations[user_id] = history[-CONVERSATION_WINDOW_SIZE:]
 
@@ -50,23 +53,37 @@ async def handle_message(bot: Bot, event: MessageEvent):
     if not user_msg:
         return
 
-    # ── 1. HITL 放行 ──
+    # HITL 放行
     if user_msg == "同意" and security.has_pending(user_id):
         cmd = security.pop_pending(user_id)
         result = command_executor.execute(cmd, user_id=user_id)
         await god_mode.finish(f"✅ 放行操作执行完毕：\n{result}")
 
-    # ── 2. 斜杠命令路由 ──
+    # 斜杠命令
     reply = await _handle_slash_command(user_msg, user_id)
     if reply is not None:
         await god_mode.finish(reply)
 
-    # ── 3. LLM Function Calling 主流程 ──
+    # LLM 主流程
     await _handle_llm_flow(bot, event, user_msg, user_id)
 
 
+# ── 斜杠命令 ──
+
 async def _handle_slash_command(msg: str, user_id: str) -> str | None:
-    """处理斜杠命令，返回回复文本；非命令返回 None。"""
+    if msg == "/help":
+        return (
+            "📖 Axon 命令列表：\n"
+            "/记住 <内容> — 存入长期记忆\n"
+            "/记忆列表 — 查看所有记忆\n"
+            "/删除记忆 <id> — 删除指定记忆\n"
+            "/技能 — 查看可用技能\n"
+            "/清空 — 清除对话历史\n"
+            "/定时 <分> <时> <日> <月> <周> <描述> — 注册定时任务\n"
+            "/任务列表 — 查看定时任务\n"
+            "/取消任务 <id> — 取消定时任务\n"
+            "同意 — 放行被拦截的高危命令"
+        )
 
     if msg.startswith("/记住"):
         content = msg[len("/记住"):].strip()
@@ -115,11 +132,10 @@ async def _handle_slash_command(msg: str, user_id: str) -> str | None:
         ok = scheduler_tasks.cancel_task(tid)
         return f"✅ 任务 #{tid} 已取消" if ok else f"❌ 未找到任务 #{tid}"
 
-    return None  # 不是斜杠命令
+    return None
 
 
 def _handle_schedule_command(msg: str, user_id: str) -> str:
-    """解析 /定时 <cron5段> <描述>"""
     parts = msg[len("/定时"):].strip().split(maxsplit=5)
     if len(parts) < 6:
         return "用法: /定时 <分> <时> <日> <月> <周> <任务描述>"
@@ -132,7 +148,7 @@ def _handle_schedule_command(msg: str, user_id: str) -> str:
         return f"❌ 注册失败: {e}"
 
 
-# ── LLM 主流程 ──
+# ── LLM 主流程（tool-call 循环） ──
 
 async def _handle_llm_flow(
     bot: Bot,
@@ -140,15 +156,20 @@ async def _handle_llm_flow(
     user_msg: str,
     user_id: str,
 ):
-    """多轮对话 + Function Calling 执行循环。"""
+    """多轮对话 + Function Calling 循环。
+
+    LLM 调用 tool → 执行 → 结果回填 → LLM 再决策，
+    循环至 LLM 返回纯文本或达到最大轮次。
+    """
     _append_history(user_id, "user", user_msg)
 
-    # 构建 system prompt
     mem_prompt = memory.format_for_prompt()
     skill_prompt = skill_manager.format_for_prompt()
     sys_prompt = (
-        "你是专属个人 AI 助理。你可以通过 tool 调用在本机执行命令、读取文件或搜索网络。"
-        "优先使用对话回复解答问题；只有用户明确要求操作本机时才调用 tool。\n"
+        "你是 Axon，专属个人 AI 助理。你可以通过 tool 在本机执行命令、"
+        "读取文件、搜索互联网或抓取网页内容。\n"
+        "可以连续调用多个 tool 完成复杂任务（如先搜索再抓取详情）。\n"
+        "优先使用对话回复；需要最新信息或操作本机时才调用 tool。\n"
         "【安全准则】：绝不可修改系统核心文件配置。\n"
     )
     if mem_prompt:
@@ -156,83 +177,95 @@ async def _handle_llm_flow(
     if skill_prompt:
         sys_prompt += f"\n{skill_prompt}\n"
 
-    messages = [{"role": "system", "content": sys_prompt}] + _get_history(user_id)
+    messages = [
+        {"role": "system", "content": sys_prompt},
+    ] + _get_history(user_id)
 
-    try:
-        result = await llm_client.chat(messages)
-    except Exception as e:
-        logger.error("LLM 调用失败: %s", e)
-        await god_mode.finish(f"❌ AI 服务暂时不可用: {e}")
-        return
+    for _ in range(_MAX_TOOL_ROUNDS):
+        try:
+            result = await llm_client.chat(messages)
+        except Exception as e:
+            logger.error("LLM 调用失败: %s", e)
+            await god_mode.finish(f"❌ AI 服务暂时不可用: {e}")
+            return
 
-    # ── 纯文本回复 ──
-    if result["type"] == "text":
-        reply = result["content"]
-        _append_history(user_id, "assistant", reply)
-        await god_mode.finish(_truncate_reply(reply))
+        # 纯文本 → 最终回复
+        if result["type"] == "text":
+            reply = result["content"]
+            _append_history(user_id, "assistant", reply)
+            await god_mode.finish(_truncate_reply(reply))
+            return
 
-    # ── Tool Call 处理 ──
-    tool_name = result["name"]
-    tool_args = result["arguments"]
+        # Tool Call → 执行
+        tool_name = result["name"]
+        tool_args = result["arguments"]
+        tool_output = await _dispatch_tool(tool_name, tool_args, user_id)
 
-    if tool_name == "run_command":
-        cmd = tool_args.get("command", "")
-        await _execute_command(cmd, user_id)
+        # HITL 拦截时已 finish，直接退出
+        if tool_output is None:
+            return
 
-    elif tool_name == "read_file":
-        path = tool_args.get("path", "")
-        await _read_file(path, user_id)
+        # 回填结果供 LLM 下一轮决策
+        messages.append({
+            "role": "assistant",
+            "content": f"[调用 {tool_name}({tool_args})]",
+        })
+        messages.append({
+            "role": "user",
+            "content": f"[tool 结果]\n{tool_output}",
+        })
 
-    elif tool_name == "search_web":
-        query = tool_args.get("query", "")
-        reply = f"🔍 搜索功能暂未完整接入，搜索词: {query}"
-        _append_history(user_id, "assistant", reply)
-        await god_mode.finish(reply)
-
-    else:
-        await god_mode.finish(f"❌ 未知 tool: {tool_name}")
-
-
-async def _execute_command(cmd: str, user_id: str):
-    """执行命令，含 HITL 拦截。"""
-    if security.is_dangerous(cmd):
-        security.store_pending(user_id, cmd)
-        await god_mode.finish(
-            f"⚠️ 拦截高危操作！Agent 试图执行：\n{cmd}\n\n回复「同意」放行。"
-        )
-        return  # finish 已终止消息流，但显式 return 防止逻辑穿透
-
-    output = command_executor.execute(cmd, user_id=user_id)
-    reply = f"> 执行: {cmd}\n\n{output}"
-    _append_history(user_id, "assistant", reply)
-    await god_mode.finish(_truncate_reply(reply))
+    # 达到最大轮次
+    _append_history(user_id, "assistant", "⚠️ 已达到最大工具调用轮次。")
+    await god_mode.finish("⚠️ 已执行多轮工具调用，自动停止。请查看以上结果。")
 
 
-# 禁止读取的敏感路径前缀
+# ── Tool 分发 ──
+
+async def _dispatch_tool(
+    name: str, args: dict, user_id: str,
+) -> str | None:
+    """执行单个 tool，返回输出文本。None = HITL 已拦截。"""
+    if name == "run_command":
+        cmd = args.get("command", "")
+        if security.is_dangerous(cmd):
+            security.store_pending(user_id, cmd)
+            await god_mode.finish(
+                f"⚠️ 拦截高危操作！\n{cmd}\n\n回复「同意」放行。"
+            )
+            return None
+        return command_executor.execute(cmd, user_id=user_id)
+
+    if name == "read_file":
+        return _safe_read_file(args.get("path", ""))
+
+    if name == "search_web":
+        return web_search.search(args.get("query", ""))
+
+    if name == "fetch_url":
+        return web_search.fetch_url(args.get("url", ""))
+
+    return f"❌ 未知 tool: {name}"
+
+
+# ── 安全文件读取 ──
 _BLOCKED_PATHS = ("/etc/shadow", "/etc/passwd", "/proc", "/sys")
 
 
-async def _read_file(path: str, user_id: str):
-    """读取文件内容，含路径安全检查。"""
+def _safe_read_file(path: str) -> str:
     if any(path.startswith(p) for p in _BLOCKED_PATHS):
-        reply = f"🚫 安全策略拒绝读取: {path}"
-    else:
-        try:
-            if not os.path.isfile(path):
-                reply = f"❌ 文件不存在: {path}"
-            else:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                reply = f"📄 {path}:\n\n{content}"
-        except Exception as e:
-            reply = f"❌ 读取失败: {e}"
-
-    _append_history(user_id, "assistant", reply)
-    await god_mode.finish(_truncate_reply(reply))
+        return f"🚫 安全策略拒绝读取: {path}"
+    try:
+        if not os.path.isfile(path):
+            return f"❌ 文件不存在: {path}"
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return _truncate_reply(f"📄 {path}:\n\n{content}")
+    except Exception as e:
+        return f"❌ 读取失败: {e}"
 
 
 def _truncate_reply(text: str) -> str:
-    """消息截断。"""
     if len(text) <= MAX_MESSAGE_LENGTH:
         return text
     return text[:MAX_MESSAGE_LENGTH] + f"\n\n[已截断，共 {len(text)} 字符]"
