@@ -1,6 +1,9 @@
 # 凭据
 .env
 
+# 技能注册表（本地状态）
+skills/.registry.json
+
 # Python
 __pycache__/
 *.pyc
