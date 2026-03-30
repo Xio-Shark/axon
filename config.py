@@ -13,12 +13,12 @@ SCHEDULED_TASKS_FILE = os.path.join(DATA_DIR, "scheduled_tasks.json")
 AUDIT_LOG_FILE = os.path.join(DATA_DIR, "audit.log")
 
 # ── LLM ──
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://your-llm-api.com/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-5kjaXwucbLWWJ6h1YxV97XJlCmECgw2VhmsxG6DG5TaG1dtG")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://timesniper.club")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "glm-5-turbo")
 
 # ── 机器人主人（接收定时推送的 QQ 用户 ID） ──
-OWNER_QQ_ID = os.getenv("OWNER_QQ_ID", "")
+OWNER_QQ_ID = os.getenv("OWNER_QQ_ID", "1123646072")
 
 # ── 命令执行 ──
 COMMAND_TIMEOUT_SEC = 30

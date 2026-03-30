@@ -23,6 +23,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SKILLS_DIR, exist_ok=True)
 
 # 初始化 NoneBot
+if "DRIVER" not in os.environ:
+    os.environ["DRIVER"] = "~fastapi+~httpx+~websockets"
 nonebot.init()
 
 # 注册 QQ 官方适配器
