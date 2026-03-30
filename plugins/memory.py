@@ -29,8 +29,9 @@ def _save_all(entries: list[dict]):
 def add(content: str, tag: str = "general") -> dict:
     """新增一条记忆，返回该条目。"""
     entries = load_all()
+    next_id = max((e["id"] for e in entries), default=0) + 1
     entry = {
-        "id": len(entries) + 1,
+        "id": next_id,
         "content": content,
         "tag": tag,
         "created_at": datetime.now().isoformat(),

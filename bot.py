@@ -1,19 +1,24 @@
-"""QQ AI 助理启动入口。"""
+"""Axon — QQ AI 助理启动入口。"""
 
 import os
+import sys
 import logging
 
 import nonebot
 from nonebot.adapters.qq import Adapter as QQAdapter
 
-from config import DATA_DIR, SKILLS_DIR
+from config import DATA_DIR, LLM_API_KEY, SKILLS_DIR
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
-# 确保数据目录存在
+# 启动前校验
+if not LLM_API_KEY:
+    logging.getLogger(__name__).error("LLM_API_KEY 未配置，请检查 .env 文件")
+    sys.exit(1)
+
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SKILLS_DIR, exist_ok=True)
 

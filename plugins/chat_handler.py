@@ -185,8 +185,6 @@ async def _handle_llm_flow(
 
     elif tool_name == "search_web":
         query = tool_args.get("query", "")
-        # 简化实现：用 curl 搜索
-        cmd = f'curl -s "https://google.com/search?q={query}" | head -100'
         reply = f"🔍 搜索功能暂未完整接入，搜索词: {query}"
         _append_history(user_id, "assistant", reply)
         await god_mode.finish(reply)
@@ -202,6 +200,7 @@ async def _execute_command(cmd: str, user_id: str):
         await god_mode.finish(
             f"⚠️ 拦截高危操作！Agent 试图执行：\n{cmd}\n\n回复「同意」放行。"
         )
+        return  # finish 已终止消息流，但显式 return 防止逻辑穿透
 
     output = command_executor.execute(cmd, user_id=user_id)
     reply = f"> 执行: {cmd}\n\n{output}"
@@ -209,17 +208,24 @@ async def _execute_command(cmd: str, user_id: str):
     await god_mode.finish(_truncate_reply(reply))
 
 
+# 禁止读取的敏感路径前缀
+_BLOCKED_PATHS = ("/etc/shadow", "/etc/passwd", "/proc", "/sys")
+
+
 async def _read_file(path: str, user_id: str):
-    """读取文件内容。"""
-    try:
-        if not os.path.isfile(path):
-            reply = f"❌ 文件不存在: {path}"
-        else:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-            reply = f"📄 {path}:\n\n{content}"
-    except Exception as e:
-        reply = f"❌ 读取失败: {e}"
+    """读取文件内容，含路径安全检查。"""
+    if any(path.startswith(p) for p in _BLOCKED_PATHS):
+        reply = f"🚫 安全策略拒绝读取: {path}"
+    else:
+        try:
+            if not os.path.isfile(path):
+                reply = f"❌ 文件不存在: {path}"
+            else:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                reply = f"📄 {path}:\n\n{content}"
+        except Exception as e:
+            reply = f"❌ 读取失败: {e}"
 
     _append_history(user_id, "assistant", reply)
     await god_mode.finish(_truncate_reply(reply))
