@@ -10,7 +10,6 @@ from nonebot import get_bot, require
 from config import (
     COMMAND_TIMEOUT_SEC,
     DATA_DIR,
-    MAX_MESSAGE_LENGTH,
     OWNER_QQ_ID,
     SCHEDULED_TASKS_FILE,
 )
@@ -160,7 +159,8 @@ def list_tasks() -> list[dict]:
 
 def restore_tasks():
     """重启后恢复持久化的动态任务到调度器。"""
-    for task in _load_tasks():
+    tasks = _load_tasks()
+    for task in tasks:
         parts = task["cron"].strip().split()
         if len(parts) != 5:
             continue
@@ -177,7 +177,7 @@ def restore_tasks():
             args=[task["description"], task["owner_id"]],
             replace_existing=True,
         )
-    logger.info("已恢复 %d 个持久化定时任务", len(_load_tasks()))
+    logger.info("已恢复 %d 个持久化定时任务", len(tasks))
 
 
 # ── 内置早报任务 ──
