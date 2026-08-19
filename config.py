@@ -14,7 +14,7 @@ AUDIT_LOG_FILE = os.path.join(DATA_DIR, "audit.log")
 
 # ── LLM ──
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://timesniper.club")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "glm-5-turbo")
 
 # ── 机器人主人（接收定时推送的 QQ 用户 ID） ──
